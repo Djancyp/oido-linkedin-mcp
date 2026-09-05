@@ -100,8 +100,10 @@ Specifically, it does **not** include:
   a real browser again, and space out search calls rather than running
   several back-to-back.
 - Proxy support.
-- Persistent-profile rotation / a daemon. One Chrome tab is launched
-  lazily per process and reused for its whole lifetime.
+- A daemon or multiple rotating profiles. One Chrome profile per
+  org/user is reused across processes/restarts (see "Persistent browser
+  profile" below) — not the pooled, rotated identities the Python
+  original supports.
 - Deep auth-wall detection. `waitAuthOK` only checks for the obvious
   checkpoint/login/authwall URLs and a signed-out-looking body — a subtler
   LinkedIn challenge page may still be scraped as if it were real content.
@@ -113,6 +115,29 @@ instead of wedging every later call too; a failed browser launch is
 retried on the next call rather than being cached as a permanent error.
 Scraped text fields are capped (~20KB for a full page, smaller for list
 cards) so one large page can't blow up a tool response.
+
+## Persistent browser profile
+
+A brand-new headless browser signing straight into LinkedIn and
+immediately scraping looks like a fresh device automating from the first
+second — itself a signal, on top of headless Chromium's own fingerprint
+tells. To reduce that, Chrome's profile is **not** a throwaway per-process
+temp dir: it lives at `$HOME/.oido-linkedin-chrome-profile`, where `$HOME`
+is set by oido-core to the calling org/user's own directory on the
+persistent `oido_sandboxes` volume — so history, cookies, cache and
+localStorage accumulate across calls and restarts the way a real
+returning user's browser would, instead of resetting every time.
+
+- Falls back to the old throwaway `/tmp/oido-linkedin-chrome-<pid>`
+  behavior (deleted on exit) when `$HOME` isn't set or writable — e.g.
+  running the binary standalone, as the manual smoke test above does.
+- A profile directory isn't safe for two Chrome instances at once, so an
+  exclusive lock file (`<profile>.lock`) guards it: an overlapping call
+  for the same org/user waits (up to the 45s tool timeout) rather than
+  colliding with an in-progress one.
+- Growth is unbounded in this pass — Chrome's cache/history/etc.
+  accumulate on the persistent volume with no automatic pruning. Worth
+  watching if disk usage on that volume becomes a concern.
 
 ## Notes
 

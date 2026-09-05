@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math/rand"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
+	"golang.org/x/sys/unix"
 )
 
 const defaultUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
@@ -50,11 +52,60 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
 var browserMu sync.Mutex
 
 var (
-	browserCtx         context.Context
-	browserAllocCancel context.CancelFunc
-	browserCtxCancel   context.CancelFunc
-	browserUserDataDir string
+	browserCtx              context.Context
+	browserAllocCancel      context.CancelFunc
+	browserCtxCancel        context.CancelFunc
+	browserUserDataDir      string
+	browserProfileEphemeral bool
+	browserLockFile         *os.File
 )
+
+// profileLockWait bounds how long a call waits for another process to
+// release the shared per-org-per-user profile lock before giving up.
+const profileLockWait = 40 * time.Second
+
+// chromeProfileDir picks where Chrome's profile lives. oido-core sets HOME
+// to the calling org/user's own directory on the persistent oido_sandboxes
+// volume (internal/mcp/discover.go's buildCleanEnv) — using it gives every
+// call for the same org/user account a stable, reused browser identity
+// (history, localStorage, cache) instead of looking like a brand-new device
+// signing in fresh on every single call, which is itself a signal LinkedIn's
+// risk engine watches for. Falls back to a throwaway per-process /tmp dir
+// when HOME isn't usable (e.g. running the binary standalone, as OIDO.md's
+// manual smoke test does).
+func chromeProfileDir() (dir string, ephemeral bool) {
+	if home := strings.TrimSpace(os.Getenv("HOME")); home != "" {
+		candidate := filepath.Join(home, ".oido-linkedin-chrome-profile")
+		if err := os.MkdirAll(candidate, 0o700); err == nil {
+			return candidate, false
+		}
+	}
+	return fmt.Sprintf("/tmp/oido-linkedin-chrome-%d", os.Getpid()), true
+}
+
+// acquireProfileLock takes an exclusive flock on lockPath, waiting up to
+// maxWait. A persistent profile directory is not safe for two Chrome
+// instances at once — a second process pointed at an in-use profile won't
+// get a working CDP session — so overlapping calls for the same org/user
+// must serialize on this rather than collide.
+func acquireProfileLock(lockPath string, maxWait time.Duration) (*os.File, error) {
+	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("open profile lock: %w", err)
+	}
+	deadline := time.Now().Add(maxWait)
+	for {
+		err := unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB)
+		if err == nil {
+			return f, nil
+		}
+		if time.Now().After(deadline) {
+			f.Close()
+			return nil, fmt.Errorf("LinkedIn browser profile is busy — another call for this account is still running; try again shortly")
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+}
 
 func liAtCookie() string {
 	return strings.TrimSpace(os.Getenv("LINKEDIN_LI_AT"))
@@ -100,11 +151,21 @@ func ensureBrowser() (context.Context, error) {
 	if err := os.Setenv("TMPDIR", "/tmp"); err != nil {
 		return nil, fmt.Errorf("set TMPDIR: %w", err)
 	}
-	userDataDir := fmt.Sprintf("/tmp/oido-linkedin-chrome-%d", os.Getpid())
+	userDataDir, ephemeral := chromeProfileDir()
 	if err := os.MkdirAll(userDataDir, 0o700); err != nil {
 		return nil, fmt.Errorf("create chrome user-data-dir: %w", err)
 	}
 	browserUserDataDir = userDataDir
+	browserProfileEphemeral = ephemeral
+
+	if !ephemeral {
+		lock, err := acquireProfileLock(userDataDir+".lock", profileLockWait)
+		if err != nil {
+			browserUserDataDir = ""
+			return nil, err
+		}
+		browserLockFile = lock
+	}
 
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
 		chromedp.Flag("headless", isHeadless()),
@@ -144,8 +205,7 @@ func ensureBrowser() (context.Context, error) {
 	if err != nil {
 		ctxCancel()
 		allocCancel()
-		_ = os.RemoveAll(userDataDir)
-		browserUserDataDir = ""
+		releaseProfile()
 		return nil, fmt.Errorf("launch browser: %w", err)
 	}
 	browserCtx = ctx
@@ -166,8 +226,23 @@ func shutdownBrowser() {
 		browserAllocCancel()
 	}
 	browserCtx = nil
+	releaseProfile()
+}
+
+// releaseProfile releases the profile lock (if held) and removes the
+// profile directory only when it was the ephemeral /tmp fallback — a
+// persistent per-org-per-user profile must survive past this process so the
+// next call reuses the same browser identity. Callers must hold browserMu.
+func releaseProfile() {
+	if browserLockFile != nil {
+		_ = unix.Flock(int(browserLockFile.Fd()), unix.LOCK_UN)
+		_ = browserLockFile.Close()
+		browserLockFile = nil
+	}
 	if browserUserDataDir != "" {
-		_ = os.RemoveAll(browserUserDataDir)
+		if browserProfileEphemeral {
+			_ = os.RemoveAll(browserUserDataDir)
+		}
 		browserUserDataDir = ""
 	}
 }
