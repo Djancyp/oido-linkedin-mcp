@@ -80,9 +80,25 @@ Specifically, it does **not** include:
 
 - WebRTC/WebGL fingerprint hardening, or any of the Patchright-level
   stealth patches. Basic measures only: disabled automation flags,
-  `navigator.webdriver` patched, a realistic desktop User-Agent.
+  `navigator.webdriver` patched, a spoofed WebGL vendor/renderer string
+  (real headless Chromium reports "SwiftShader", a well-known headless
+  tell), a realistic desktop User-Agent, and jittered (not perfectly
+  uniform) scroll/navigation timing.
 - Rate-limit detection/backoff. If LinkedIn starts throttling, tools will
   just start returning odd or empty results — slow down manually.
+- **Bot-detection avoidance beyond the above is fundamentally an arms
+  race** — there is no configuration that makes a headless, server-side
+  browser indistinguishable from a real signed-in user's browser and
+  behavior. LinkedIn's `search/results/*` pages (`linkedin_search_posts`,
+  `linkedin_search_people`, `linkedin_search_companies`,
+  `linkedin_search_jobs`) are its most heavily monitored surface, since
+  they're the primary target of commercial scraping/lead-gen tools — a
+  checkpoint or a logged-out `li_at` session is more likely to come from
+  repeated or rapid use of these than from the read-a-single-profile
+  tools. If you hit a checkpoint: stop calling LinkedIn tools for a while,
+  get a fresh `li_at` cookie once you can browse linkedin.com normally in
+  a real browser again, and space out search calls rather than running
+  several back-to-back.
 - Proxy support.
 - Persistent-profile rotation / a daemon. One Chrome tab is launched
   lazily per process and reused for its whole lifetime.

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"math/rand"
 	"os"
 	"strings"
 	"sync"
@@ -15,11 +16,29 @@ import (
 
 const defaultUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 
+// stealthInitScript patches the most obvious tells that a scraping-detection
+// script checks for. It's a small, low-effort subset of what a dedicated
+// stealth plugin does — see OIDO.md's "Known gaps" for what's still missing
+// (this is an arms race, not a solved problem).
 const stealthInitScript = `
 Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
 window.chrome = window.chrome || { runtime: {} };
 Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
-Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
+// Headless Chromium's software (SwiftShader) WebGL renderer string is one of
+// the most reliable headless tells there is. Report a generic real-GPU-like
+// string instead of leaving the default, which names SwiftShader outright.
+(() => {
+	const spoof = (proto) => {
+		const orig = proto.getParameter;
+		proto.getParameter = function (param) {
+			if (param === 37445) return 'Intel Inc.';
+			if (param === 37446) return 'Intel Iris OpenGL Engine';
+			return orig.call(this, param);
+		};
+	};
+	if (window.WebGLRenderingContext) spoof(WebGLRenderingContext.prototype);
+	if (window.WebGL2RenderingContext) spoof(WebGL2RenderingContext.prototype);
+})();
 `
 
 // browserMu serializes every tool call, and also guards the launch state
@@ -158,7 +177,7 @@ func shutdownBrowser() {
 func navigate(ctx context.Context, url string) error {
 	if err := chromedp.Run(ctx,
 		chromedp.Navigate(url),
-		chromedp.Sleep(1500*time.Millisecond),
+		chromedp.Sleep(time.Duration(1200+rand.Intn(900))*time.Millisecond),
 	); err != nil {
 		return fmt.Errorf("navigate to %s: %w", url, err)
 	}
@@ -213,14 +232,21 @@ func bodyText(ctx context.Context) (string, error) {
 	return capText(text), nil
 }
 
-// scrollToBottom scrolls the page to the bottom `times` times, pausing
+// scrollToBottom scrolls the page toward the bottom `times` times, pausing
 // between scrolls for lazy-loaded content, mirroring the Python server's
-// pagination-by-scroll approach on activity/feed/search pages.
+// pagination-by-scroll approach on activity/feed/search pages. Each scroll
+// moves a random partial distance rather than jumping straight to
+// scrollHeight, with a jittered pause — LinkedIn's most heavily monitored
+// pages (search/content especially) are more likely to flag a perfectly
+// uniform instant-jump scroll pattern as automation than a slightly uneven
+// one. This is a mitigation, not a fix: see OIDO.md's "Known gaps".
 func scrollToBottom(ctx context.Context, times int) error {
 	for i := 0; i < times; i++ {
+		fraction := 0.5 + rand.Float64()*0.5 // scroll 50-100% of one viewport
+		js := fmt.Sprintf(`window.scrollBy(0, window.innerHeight * %f)`, fraction)
 		if err := chromedp.Run(ctx,
-			chromedp.Evaluate(`window.scrollTo(0, document.body.scrollHeight)`, nil),
-			chromedp.Sleep(900*time.Millisecond),
+			chromedp.Evaluate(js, nil),
+			chromedp.Sleep(time.Duration(700+rand.Intn(700))*time.Millisecond),
 		); err != nil {
 			return fmt.Errorf("scroll: %w", err)
 		}
