@@ -65,14 +65,22 @@ func ensureBrowser() (context.Context, error) {
 		return nil, fmt.Errorf("LINKEDIN_LI_AT is not set — see OIDO.md for how to get your session cookie")
 	}
 
-	// Chromium's process-singleton lock is a Unix-domain socket under the
-	// user-data-dir, and AF_UNIX paths are capped at ~108 bytes. Without an
-	// explicit UserDataDir, chromedp derives one from os.TempDir(), which
-	// respects $TMPDIR — and oido-core's per-org/per-user sandboxes set a
-	// long one (/sandboxes/orgs/<uuid>/users/<uuid>/workspace/../tmp), long
-	// enough on its own that the derived socket path overflows the limit and
-	// Chrome refuses to start ("Socket path too long"). A short, literal
-	// /tmp path sidesteps that regardless of $TMPDIR.
+	// Chromium's process-singleton lock is a Unix-domain socket, capped at
+	// ~108 bytes. Passing --user-data-dir alone is not enough to control
+	// where that socket ends up: Chromium's crash-reporting/process-
+	// singleton init reads $TMPDIR directly (independent of --user-data-dir)
+	// for its own scratch directory, and when a stray or invalid --user-
+	// data-dir situation arises it falls back to a scratch profile there
+	// too. oido-core's per-org/per-user sandboxes set a long $TMPDIR
+	// (/sandboxes/orgs/<uuid>/users/<uuid>/workspace/../tmp) — long enough
+	// on its own to overflow the socket-path limit — so both the profile
+	// dir AND $TMPDIR itself must be pinned short. Overriding TMPDIR on
+	// this process (rather than only passing it to the child) means the
+	// short value reaches the child via the ordinary, unambiguous single
+	// copy in its inherited environment.
+	if err := os.Setenv("TMPDIR", "/tmp"); err != nil {
+		return nil, fmt.Errorf("set TMPDIR: %w", err)
+	}
 	userDataDir := fmt.Sprintf("/tmp/oido-linkedin-chrome-%d", os.Getpid())
 	if err := os.MkdirAll(userDataDir, 0o700); err != nil {
 		return nil, fmt.Errorf("create chrome user-data-dir: %w", err)
