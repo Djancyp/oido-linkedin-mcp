@@ -110,3 +110,13 @@ cards) so one large page can't blow up a tool response.
   deliberately.
 - A Chrome or Chromium binary must be present on the host; chromedp
   auto-discovers common install paths, or set `LINKEDIN_CHROME_PATH`.
+- Chrome runs with `--no-sandbox` (oido-core's containers run as root,
+  and Chromium refuses to start as root without it) and a fixed short
+  `/tmp/oido-linkedin-chrome-<pid>` user-data-dir, bypassing `$TMPDIR` —
+  in oido-core's per-org/per-user sandboxes that variable is long enough
+  on its own to overflow the ~108-byte limit on the Unix-domain socket
+  Chrome's process-singleton lock uses, which otherwise fails Chrome's
+  launch with "Socket path too long".
+- A `sched_getscheduler: Function not implemented` warning from crashpad
+  in the logs is benign — it's the sandboxed seccomp profile blocking a
+  syscall crashpad merely probes for, not a launch failure.

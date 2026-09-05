@@ -34,6 +34,7 @@ var (
 	browserCtx         context.Context
 	browserAllocCancel context.CancelFunc
 	browserCtxCancel   context.CancelFunc
+	browserUserDataDir string
 )
 
 func liAtCookie() string {
@@ -64,12 +65,27 @@ func ensureBrowser() (context.Context, error) {
 		return nil, fmt.Errorf("LINKEDIN_LI_AT is not set — see OIDO.md for how to get your session cookie")
 	}
 
+	// Chromium's process-singleton lock is a Unix-domain socket under the
+	// user-data-dir, and AF_UNIX paths are capped at ~108 bytes. Without an
+	// explicit UserDataDir, chromedp derives one from os.TempDir(), which
+	// respects $TMPDIR — and oido-core's per-org/per-user sandboxes set a
+	// long one (/sandboxes/orgs/<uuid>/users/<uuid>/workspace/../tmp), long
+	// enough on its own that the derived socket path overflows the limit and
+	// Chrome refuses to start ("Socket path too long"). A short, literal
+	// /tmp path sidesteps that regardless of $TMPDIR.
+	userDataDir := fmt.Sprintf("/tmp/oido-linkedin-chrome-%d", os.Getpid())
+	if err := os.MkdirAll(userDataDir, 0o700); err != nil {
+		return nil, fmt.Errorf("create chrome user-data-dir: %w", err)
+	}
+	browserUserDataDir = userDataDir
+
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
 		chromedp.Flag("headless", isHeadless()),
 		chromedp.Flag("disable-blink-features", "AutomationControlled"),
 		chromedp.Flag("disable-infobars", true),
 		chromedp.UserAgent(defaultUserAgent),
 		chromedp.WindowSize(1366, 900),
+		chromedp.UserDataDir(userDataDir),
 		// This process (and oido-core's containers generally) runs as root,
 		// and Chromium refuses to start as root without --no-sandbox.
 		// --disable-dev-shm-usage avoids crashes from Docker's default small
@@ -101,6 +117,8 @@ func ensureBrowser() (context.Context, error) {
 	if err != nil {
 		ctxCancel()
 		allocCancel()
+		_ = os.RemoveAll(userDataDir)
+		browserUserDataDir = ""
 		return nil, fmt.Errorf("launch browser: %w", err)
 	}
 	browserCtx = ctx
@@ -121,6 +139,10 @@ func shutdownBrowser() {
 		browserAllocCancel()
 	}
 	browserCtx = nil
+	if browserUserDataDir != "" {
+		_ = os.RemoveAll(browserUserDataDir)
+		browserUserDataDir = ""
+	}
 }
 
 // navigate loads url in the shared tab and waits for the network to go
