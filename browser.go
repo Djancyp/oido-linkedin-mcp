@@ -70,6 +70,12 @@ func ensureBrowser() (context.Context, error) {
 		chromedp.Flag("disable-infobars", true),
 		chromedp.UserAgent(defaultUserAgent),
 		chromedp.WindowSize(1366, 900),
+		// This process (and oido-core's containers generally) runs as root,
+		// and Chromium refuses to start as root without --no-sandbox.
+		// --disable-dev-shm-usage avoids crashes from Docker's default small
+		// /dev/shm, which Chromium otherwise uses for shared memory.
+		chromedp.NoSandbox,
+		chromedp.Flag("disable-dev-shm-usage", true),
 	)
 	if p := chromePath(); p != "" {
 		opts = append(opts, chromedp.ExecPath(p))
