@@ -1,0 +1,4 @@
+*-mcp
+*.zip
+dist/
+.env

@@ -1,0 +1,112 @@
+# Oido LinkedIn
+
+Scrape and act on LinkedIn — profiles, companies, jobs, posts, feed, and
+messaging — via MCP, by driving a real Chrome session with your own
+`li_at` session cookie. There is no official LinkedIn API here; this
+automates the same pages a signed-in browser sees.
+
+This is a Go/chromedp port of
+[linkedin-mcp-server](https://github.com/) with a **reduced anti-detection
+surface** — see "Known gaps" below before relying on it heavily.
+
+## Setup
+
+1. Log into linkedin.com in a normal browser.
+2. Open devtools → Application (Chrome) or Storage (Firefox) → Cookies →
+   `https://www.linkedin.com` → find the cookie named `li_at` → copy its
+   value.
+3. Fill the extension settings:
+   - **LINKEDIN_LI_AT** — the `li_at` cookie value (sensitive).
+   - **LINKEDIN_HEADLESS** — leave `true` unless debugging.
+   - **LINKEDIN_CHROME_PATH** — only if Chrome/Chromium isn't auto-found.
+4. Save. Verify with `linkedin_get_my_profile`.
+
+The cookie expires periodically (LinkedIn rotates it, and it's tied to
+your account's session). When a tool call fails with a "sign in or
+verify" error, get a fresh `li_at` value and update the setting.
+
+## Tools
+
+Person
+
+- `linkedin_get_person_profile` — profile by `linkedin_username` (or full
+  URL), with optional `sections` (experience, education, interests,
+  honors, languages, certifications, skills, projects, contact_info,
+  posts) and `max_scrolls`.
+- `linkedin_search_people` — by `keywords`, `location`, `network`
+  (`F`/`S`/`O`), `current_company`.
+- `linkedin_connect_with_person` — sends a connection invite, optional
+  `note`. **Changes real account state.**
+- `linkedin_get_sidebar_profiles` — "People also viewed" on a profile.
+- `linkedin_get_my_profile` — same shape as `get_person_profile`, for the
+  authenticated account.
+
+Company
+
+- `linkedin_get_company_profile` — by `company_name`, optional `sections`
+  (posts, jobs; about is always included).
+- `linkedin_get_company_posts`
+- `linkedin_search_companies` — by `keywords`.
+- `linkedin_get_company_employees` — optional `keywords` filter.
+
+Job
+
+- `linkedin_get_job_details` — by `job_id`.
+- `linkedin_search_jobs` — `keywords`, `location`, `max_pages`,
+  `date_posted`, `job_type`, `experience_level`, `work_type`,
+  `easy_apply`, `sort_by`.
+- `linkedin_get_saved_jobs`
+
+Feed & posts
+
+- `linkedin_get_feed` — `num_posts`.
+- `linkedin_search_posts` — `keywords`, `date_posted`, `max_pages`.
+
+Messaging
+
+- `linkedin_get_inbox` — `limit`.
+- `linkedin_get_conversation` — by `linkedin_username`, `thread_id`, or
+  inbox `index`.
+- `linkedin_search_conversations` — `keywords`, `limit` (filters the
+  loaded inbox locally; LinkedIn's own messaging search has no reliable
+  URL query).
+- `linkedin_send_message` — requires `confirm_send: true`. **Notifies a
+  real person and cannot be undone.**
+
+## Known gaps vs. the Python original
+
+This port trades depth for a much smaller, dependency-light Go binary.
+Specifically, it does **not** include:
+
+- WebRTC/WebGL fingerprint hardening, or any of the Patchright-level
+  stealth patches. Basic measures only: disabled automation flags,
+  `navigator.webdriver` patched, a realistic desktop User-Agent.
+- Rate-limit detection/backoff. If LinkedIn starts throttling, tools will
+  just start returning odd or empty results — slow down manually.
+- Proxy support.
+- Persistent-profile rotation / a daemon. One Chrome tab is launched
+  lazily per process and reused for its whole lifetime.
+- Deep auth-wall detection. `waitAuthOK` only checks for the obvious
+  checkpoint/login/authwall URLs and a signed-out-looking body — a subtler
+  LinkedIn challenge page may still be scraped as if it were real content.
+
+All tool calls are serialized on that one shared tab (no concurrent
+scraping), since LinkedIn UI automation is inherently step-by-step. Each
+call is bounded to a 45s timeout so a stuck page fails that one call
+instead of wedging every later call too; a failed browser launch is
+retried on the next call rather than being cached as a permanent error.
+Scraped text fields are capped (~20KB for a full page, smaller for list
+cards) so one large page can't blow up a tool response.
+
+## Notes
+
+- Selectors target stable structural anchors (`a[href*="/in/"]`, button
+  text like "Connect"/"Message"/"Send") rather than LinkedIn's obfuscated
+  CSS classes, but LinkedIn's markup does change over time — expect to
+  need selector touch-ups in `extract_cards.go` / `browser.go` /
+  `tools_*.go` occasionally.
+- `linkedin_connect_with_person` and `linkedin_send_message` are the two
+  tools that change real account state or contact a real person. Use them
+  deliberately.
+- A Chrome or Chromium binary must be present on the host; chromedp
+  auto-discovers common install paths, or set `LINKEDIN_CHROME_PATH`.

@@ -1,0 +1,42 @@
+{
+  "name": "oido-linkedin",
+  "version": "1.0.0",
+  "description": "Scrape and act on LinkedIn — profiles, companies, jobs, posts, feed, and messaging — by driving a real Chrome session with your li_at cookie. No official API.",
+  "runtime": "make build",
+  "mcpServers": {
+    "oido-linkedin": {
+      "command": "${extensionPath}/oido-linkedin-mcp",
+      "args": [],
+      "env": {
+        "LINKEDIN_LI_AT": "${LINKEDIN_LI_AT}",
+        "LINKEDIN_HEADLESS": "${LINKEDIN_HEADLESS}",
+        "LINKEDIN_CHROME_PATH": "${LINKEDIN_CHROME_PATH}"
+      }
+    }
+  },
+  "contextFileName": "OIDO.md",
+  "excludeTools": [],
+  "settings": [
+    {
+      "name": "LINKEDIN_LI_AT",
+      "description": "Your LinkedIn session cookie value (cookie name li_at), copied from a logged-in browser's devtools. Expires periodically — replace it here when tools start failing with a sign-in error.",
+      "defaultValue": "",
+      "type": "string",
+      "sensitive": true
+    },
+    {
+      "name": "LINKEDIN_HEADLESS",
+      "description": "Run Chrome headless. Set to false to watch it work locally while debugging a stuck scrape. Default: true.",
+      "defaultValue": "true",
+      "type": "string",
+      "sensitive": false
+    },
+    {
+      "name": "LINKEDIN_CHROME_PATH",
+      "description": "Optional path to a Chrome/Chromium binary, if auto-discovery doesn't find one on this host.",
+      "defaultValue": "",
+      "type": "string",
+      "sensitive": false
+    }
+  ]
+}
